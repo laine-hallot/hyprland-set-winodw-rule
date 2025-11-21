@@ -19,12 +19,8 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, Option<String>> for sup
                     if let Some(buffer_surface) = buffer_surface {
                         let ready_to_draw: Option<ReadyToDraw> = match buffer_surface {
                             BufferSurface::HasOutput(has_output) => {
-                                let ready_to_draw = ReadyToDraw::from((
-                                    has_output.clone(),
-                                    &shm,
-                                    layer_surface,
-                                    qh,
-                                ));
+                                let ready_to_draw =
+                                    ReadyToDraw::from((has_output.clone(), layer_surface));
                                 ready_to_draw.acknowledge_configure(serial);
                                 Some(ready_to_draw)
                             }

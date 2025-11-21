@@ -1,13 +1,10 @@
-use std::{
-    fs::File,
-    io::Write,
-    os::fd::AsFd,
-    time::{SystemTime, UNIX_EPOCH},
-};
+use std::{io::Write, os::fd::AsFd};
+
+use crate::wayland::ClientRegion;
 
 use super::super::protocols::State;
 
-use super::pre::Pre;
+use super::base_surface_buffer::BaseSurfaceBuffer;
 use wayland_client::{
     QueueHandle,
     protocol::{wl_buffer, wl_compositor, wl_shm, wl_surface},
@@ -15,16 +12,16 @@ use wayland_client::{
 
 #[derive(Debug, Clone)]
 pub struct InProcess {
-    pub window_buffer: Vec<bool>,
     pub monitor_id: String,
     pub size: (u16, u16),
     pub buffer: wl_buffer::WlBuffer,
     pub base_surface: wl_surface::WlSurface,
+    pub monitor_clients: Vec<ClientRegion>,
 }
 
 impl
     From<(
-        Pre,
+        BaseSurfaceBuffer,
         &wl_shm::WlShm,
         &QueueHandle<State>,
         &wl_compositor::WlCompositor,
@@ -32,32 +29,37 @@ impl
 {
     fn from(
         (pre, shm, qh, compositor): (
-            Pre,
+            BaseSurfaceBuffer,
             &wl_shm::WlShm,
             &QueueHandle<State>,
             &wl_compositor::WlCompositor,
         ),
     ) -> Self {
         InProcess {
-            window_buffer: pre.window_buffer.clone(),
             monitor_id: pre.monitor_id.clone(),
             size: pre.monitor_size,
-            buffer: create_surface_buffer(&shm, qh, (1, 1)),
+            buffer: create_minimal_surface_buffer(&shm, qh),
             base_surface: create_base_surface(compositor, qh),
+            monitor_clients: pre.monitor_clients,
         }
     }
 }
 
-fn create_surface_buffer(
+fn create_minimal_surface_buffer(
     shm: &wl_shm::WlShm,
     qh: &QueueHandle<State>,
-    size: (u16, u16),
 ) -> wl_buffer::WlBuffer {
-    let (init_w, init_h) = size;
+    let (init_w, init_h) = (1, 1);
 
-    let mut file = tempfile::tempfile().unwrap();
+    let file = tempfile::tempfile().unwrap();
+    let mut buf = std::io::BufWriter::new(&file);
 
-    draw_empty(&mut file, (init_w as u32, init_h as u32));
+    for _ in 0..(init_w * init_h) {
+        buf.write_all(&[0x00 as u8, 0x00 as u8, 0x00 as u8, 0x00 as u8])
+            .unwrap();
+    }
+    buf.flush().unwrap();
+
     let pool = shm.create_pool(file.as_fd(), init_w as i32 * init_h as i32 * 4, qh, ());
     let buffer = pool.create_buffer(
         0,
@@ -76,25 +78,4 @@ fn create_base_surface(
     qh: &QueueHandle<State>,
 ) -> wl_surface::WlSurface {
     return compositor.create_surface(qh, ());
-}
-
-const BG_COLOR: [u8; 4] = [0x00 as u8, 0x00 as u8, 0x00 as u8, 0x00 as u8];
-
-fn draw_empty(tmp: &mut File, (buf_x, buf_y): (u32, u32)) {
-    let start = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("time should go forward");
-    let mut buf = std::io::BufWriter::new(tmp);
-    for _ in 0..(buf_x * buf_y) {
-        buf.write_all(&BG_COLOR).unwrap();
-    }
-    buf.flush().unwrap();
-
-    let end = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("time should go forward");
-    /* println!(
-        "Blank - surface buffer: {}ms",
-        start.abs_diff(end).as_millis()
-    ); */
 }

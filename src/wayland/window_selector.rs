@@ -1,17 +1,13 @@
-use crate::wayland::types::ClientRegion;
+use crate::wayland::buffer_surface::ClientRegion;
 
-use super::buffer_surface::{BufferSurface, HasOutput, InProcess, Pre};
+use super::buffer_surface::{BaseSurfaceBuffer, BufferSurface, HasOutput, InProcess};
 use super::protocols::State;
 
-use color_eyre::owo_colors::OwoColorize;
-use hyprland::data::{
-    Client as HyClient, Clients as HyClients, Monitor as HyMonitor, Monitors as HyMonitors,
-};
-use hyprland::shared::{Address, WorkspaceId};
+use hyprland::data::{Client as HyClient, Clients as HyClients, Monitors as HyMonitors};
+use hyprland::shared::WorkspaceId;
 use wayland_client::EventQueue;
 
-use std::time::{SystemTime, UNIX_EPOCH};
-use std::{collections::HashMap, rc::Rc};
+use std::collections::HashMap;
 
 use wayland_client::{
     Connection, Dispatch, QueueHandle,
@@ -133,28 +129,23 @@ impl Dispatch<wl_registry::WlRegistry, ()> for State {
         }
     }
 }
+/*
+fn cords_relative_to_surface((x, y): (i16, i16)) -> (i16, i16) {}
 
-// this is horribly slow but i don't know what im doing so this will have to do
-fn window_buffer((buf_x, buf_y): (u32, u32), client_regions: Vec<ClientRegion>) -> Vec<bool> {
-    let is_any_window = |x: u32, y: u32| -> bool {
-        return client_regions.clone().iter().any(|region| {
-            let x_range = (region.at.0 as u32, (region.at.0 + region.size.0) as u32);
-            let y_range = (region.at.1 as u32, (region.at.1 + region.size.1) as u32);
-            return (x_range.0 < x && x < x_range.1) && (y_range.0 < y && y < y_range.1);
-        });
-    };
+fn is_inside_region((x_cord, y_cord): (i16, i16), client: ClientRegion) -> bool {
+    let x = client.at.0 < x_cord && x_cord < (client.at.0 + client.size.0);
+    let y = client.at.1 < y_cord && y_cord < (client.at.1 + client.size.1);
 
-    let mut buffer = vec![false; (buf_x * buf_y) as usize];
-    for y in 0..buf_y {
-        for x in 0..buf_x {
-            let buffer_index = ((y * buf_x) + x) as usize;
-
-            let is_window = is_any_window(x, y);
-            buffer[buffer_index] = is_window;
-        }
-    }
-    return buffer;
+    return x && y;
 }
+
+fn is_pixel_in_window_bounds((x_cord, y_cord): (i16, i16), client: ClientRegion) -> bool {
+    if let Some(client_monitor) = &client.monitor {
+        return is_inside_region((x_cord, y_cord), client)
+            && client_monitor.to_string() == pointer_monitor_id;
+    }
+    return false;
+} */
 
 pub fn create_state_and_region_bounds<'c>(
     clients: &'c HyClients,
@@ -208,29 +199,12 @@ pub fn create_state_and_region_bounds<'c>(
             })
             .collect();
 
-        /* let start = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("time should go forward"); */
-        let window_buffer = window_buffer(
-            (monitor.width as u32, monitor.height as u32),
-            monitor_clients,
-        );
-
-        /* let end = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("time should go forward"); */
-        /* println!(
-            "{} - Window buffer: {}ms",
-            monitor.id,
-            start.abs_diff(end).as_millis()
-        ); */
         return (
             monitor.id.to_string(),
-            BufferSurface::Pre(Pre {
-                window_buffer: window_buffer,
+            BufferSurface::Pre(BaseSurfaceBuffer {
                 monitor_id: monitor.id.to_string(),
-                wayland_output: None,
                 monitor_size: (monitor.width, monitor.height),
+                monitor_clients: monitor_clients.clone(),
             }),
         );
     }));

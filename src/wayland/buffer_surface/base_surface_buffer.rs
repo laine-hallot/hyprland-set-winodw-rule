@@ -1,9 +1,10 @@
 use wayland_client::protocol::wl_output;
 
+use crate::wayland::ClientRegion;
+
 #[derive(Debug, Clone)]
-pub struct Pre {
-    pub window_buffer: Vec<bool>,
+pub struct BaseSurfaceBuffer {
     pub monitor_id: String,
-    pub wayland_output: Option<wl_output::WlOutput>,
     pub monitor_size: (u16, u16),
+    pub monitor_clients: Vec<ClientRegion>,
 }

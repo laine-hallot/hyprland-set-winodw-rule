@@ -1,3 +1,5 @@
+use crate::wayland::ClientRegion;
+
 use super::super::protocols::State;
 use super::has_output::HasOutput;
 
@@ -28,26 +30,13 @@ pub struct ReadyToDraw {
     pub buffer: wl_buffer::WlBuffer,
     pub base_surface: wl_surface::WlSurface,
     pub wlr_surface: zwlr_layer_surface_v1::ZwlrLayerSurfaceV1,
-    pub window_buffer: Vec<bool>,
+    pub monitor_clients: Vec<ClientRegion>,
 }
 
-impl
-    From<(
-        HasOutput,
-        &wl_shm::WlShm,
-        &zwlr_layer_surface_v1::ZwlrLayerSurfaceV1,
-        &QueueHandle<State>,
-    )> for ReadyToDraw
-{
+impl From<(HasOutput, &zwlr_layer_surface_v1::ZwlrLayerSurfaceV1)> for ReadyToDraw {
     fn from(
-        (has_output, shm, layer_surface, qh): (
-            HasOutput,
-            &wl_shm::WlShm,
-            &zwlr_layer_surface_v1::ZwlrLayerSurfaceV1,
-            &QueueHandle<State>,
-        ),
+        (has_output, layer_surface): (HasOutput, &zwlr_layer_surface_v1::ZwlrLayerSurfaceV1),
     ) -> Self {
-        &has_output.monitor_id;
         let ready_to_draw = ReadyToDraw {
             monitor_id: has_output.monitor_id,
             size: has_output.size,
@@ -55,7 +44,7 @@ impl
             base_surface: has_output.base_surface,
             wlr_surface: layer_surface.clone(),
             wayland_output: has_output.wayland_output,
-            window_buffer: has_output.window_buffer,
+            monitor_clients: has_output.monitor_clients,
         };
 
         ready_to_draw
@@ -72,7 +61,7 @@ impl ReadyToDraw {
     }
 
     pub fn actually_draw_buffer_surface(&mut self, shm: &wl_shm::WlShm, qh: &QueueHandle<State>) {
-        self.buffer = create_surface_buffer(&shm, qh, self.window_buffer.clone(), self.size);
+        self.buffer = create_surface_buffer(&shm, qh, self.monitor_clients.clone(), self.size);
         self.base_surface
             .attach(Some(&self.buffer), self.size.0 as i32, self.size.1 as i32);
         self.base_surface.commit();
@@ -82,14 +71,14 @@ impl ReadyToDraw {
 fn create_surface_buffer(
     shm: &wl_shm::WlShm,
     qh: &QueueHandle<State>,
-    window_buffer: Vec<bool>,
+    monitor_clients: Vec<ClientRegion>,
     size: (u16, u16),
 ) -> wl_buffer::WlBuffer {
     let (init_w, init_h) = size;
 
     let mut file = tempfile::tempfile().unwrap();
 
-    draw(&mut file, (init_w as u32, init_h as u32), window_buffer);
+    draw(&mut file, (init_w as i16, init_h as i16), monitor_clients);
     let pool = shm.create_pool(file.as_fd(), init_w as i32 * init_h as i32 * 4, qh, ());
     let buffer = pool.create_buffer(
         0,
@@ -105,16 +94,32 @@ fn create_surface_buffer(
 const BG_COLOR: [u8; 4] = [0x00 as u8, 0x00 as u8, 0x00 as u8, 0x00 as u8];
 const FG_COLOR: [u8; 4] = [0x40 as u8, 0x40 as u8, 0x40 as u8, 0x2F as u8];
 
-fn draw(tmp: &mut File, (buf_x, buf_y): (u32, u32), window_buffer: Vec<bool>) {
-    let start = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("time should go forward");
+fn is_inside_region((x_cord, y_cord): (i16, i16), client: &ClientRegion) -> bool {
+    let x = client.at.0 < x_cord && x_cord < (client.at.0 + client.size.0);
+    let y = client.at.1 < y_cord && y_cord < (client.at.1 + client.size.1);
+
+    return x && y;
+}
+
+/* fn is_pixel_in_window_bounds((x_cord, y_cord): (i16, i16), client: ClientRegion) -> bool {
+    if let Some(client_monitor) = &client.monitor {
+        return is_inside_region((x_cord, y_cord), client)
+            && client_monitor.to_string() == pointer_monitor_id;
+    }
+    return false;
+}
+ */
+fn draw(tmp: &mut File, (buf_x, buf_y): (i16, i16), monitor_clients: Vec<ClientRegion>) {
+    /*     let start = SystemTime::now()
+    .duration_since(UNIX_EPOCH)
+    .expect("time should go forward"); */
     let mut buf = std::io::BufWriter::new(tmp);
     for y in 0..buf_y {
         for x in 0..buf_x {
-            let buffer_index = ((y * buf_x) + x) as usize;
-
-            match *window_buffer.get(buffer_index).unwrap() {
+            match monitor_clients
+                .iter()
+                .any(|client| is_inside_region((x, y), client))
+            {
                 true => buf.write_all(&FG_COLOR).unwrap(),
                 false => buf.write_all(&BG_COLOR).unwrap(),
             };
@@ -122,8 +127,8 @@ fn draw(tmp: &mut File, (buf_x, buf_y): (u32, u32), window_buffer: Vec<bool>) {
     }
     buf.flush().unwrap();
 
-    let end = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("time should go forward");
+    /*     let end = SystemTime::now()
+    .duration_since(UNIX_EPOCH)
+    .expect("time should go forward"); */
     //println!("Surface buffer: {}ms", start.abs_diff(end).as_millis());
 }
