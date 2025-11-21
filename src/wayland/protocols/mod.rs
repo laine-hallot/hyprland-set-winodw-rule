@@ -6,4 +6,4 @@ mod wl_state;
 mod wlr_layer_surface;
 mod xdg_toplevel;
 
-pub(super) use wl_state::State;
+pub use wl_state::State;

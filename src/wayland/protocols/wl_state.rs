@@ -22,6 +22,7 @@ delegate_noop!(State: ignore zwlr_layer_shell_v1::ZwlrLayerShellV1);
 delegate_noop!(State: ignore wp_cursor_shape_manager_v1::WpCursorShapeManagerV1);
 delegate_noop!(State: ignore wp_cursor_shape_device_v1::WpCursorShapeDeviceV1);
 
+#[derive(Debug, Default)]
 pub struct State {
     pub running: bool,
     pub buffer_surfaces: HashMap<String, BufferSurface>,
@@ -31,5 +32,5 @@ pub struct State {
     pub compositor: Option<wl_compositor::WlCompositor>,
     pub output_index: u8,
     pub pointer_position: Option<(f64, f64)>,
-    pub pointer_surface: Option<wl_surface::WlSurface>,
+    pub pointer_surface: Option<(String, wl_surface::WlSurface)>,
 }

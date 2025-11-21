@@ -1,8 +1,14 @@
+use crate::wayland::types::ClientRegion;
+
 use super::buffer_surface::{BufferSurface, HasOutput, InProcess, Pre};
 use super::protocols::State;
-use super::types::TotallyNotClientRegion;
 
-use hyprland::data::{Client as HyClient, Clients as HyClients, Monitors as HyMonitors};
+use color_eyre::owo_colors::OwoColorize;
+use hyprland::data::{
+    Client as HyClient, Clients as HyClients, Monitor as HyMonitor, Monitors as HyMonitors,
+};
+use hyprland::shared::{Address, WorkspaceId};
+use wayland_client::EventQueue;
 
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{collections::HashMap, rc::Rc};
@@ -129,10 +135,7 @@ impl Dispatch<wl_registry::WlRegistry, ()> for State {
 }
 
 // this is horribly slow but i don't know what im doing so this will have to do
-fn window_buffer(
-    (buf_x, buf_y): (u32, u32),
-    client_regions: Rc<Vec<Rc<TotallyNotClientRegion>>>,
-) -> Vec<bool> {
+fn window_buffer((buf_x, buf_y): (u32, u32), client_regions: Vec<ClientRegion>) -> Vec<bool> {
     let is_any_window = |x: u32, y: u32| -> bool {
         return client_regions.clone().iter().any(|region| {
             let x_range = (region.at.0 as u32, (region.at.0 + region.size.0) as u32);
@@ -153,14 +156,24 @@ fn window_buffer(
     return buffer;
 }
 
-pub fn create_window(clients: &HyClients, monitors: Rc<HyMonitors>) -> Option<HyClient> {
-    let conn = Connection::connect_to_env().unwrap();
+pub fn create_state_and_region_bounds<'c>(
+    clients: &'c HyClients,
+    monitors: &HyMonitors,
+) -> (State, Vec<ClientRegion>) {
+    let active_workspaces_ids: Vec<WorkspaceId> = monitors
+        .iter()
+        .map(|monitor| monitor.active_workspace.id)
+        .collect();
 
-    let mut event_queue = conn.new_event_queue();
-    let qhandle = event_queue.handle();
-
-    let display = conn.display();
-    display.get_registry(&qhandle, ());
+    let clients: Vec<HyClient> = clients
+        .iter()
+        .filter_map(|client| {
+            if client.mapped && active_workspaces_ids.contains(&client.workspace.id) {
+                return Some(client.clone());
+            }
+            return None;
+        })
+        .collect();
 
     let client_regions = clients.iter().map(|client| {
         if let Some(client_monitor_id) = client.monitor {
@@ -170,42 +183,42 @@ pub fn create_window(clients: &HyClients, monitors: Rc<HyMonitors>) -> Option<Hy
             {
                 let relative_x = (client.at.0 as i32) - monitor.x;
                 let relative_y = (client.at.1 as i32) - monitor.y;
-                return Rc::new(TotallyNotClientRegion {
+                return ClientRegion {
                     at: (relative_x as i16, relative_y as i16),
                     size: client.size.clone(),
                     monitor: Some(client_monitor_id.to_string()),
-                });
+                    client_id: client.address.clone(),
+                };
             }
         }
-        return Rc::new(TotallyNotClientRegion {
+        return ClientRegion {
             at: client.at.clone(),
             size: client.size.clone(),
             monitor: None,
-        });
+            client_id: client.address.clone(),
+        };
     });
 
     let buffer_surfaces = HashMap::from_iter(monitors.iter().map(|monitor| {
-        let monitor_clients: Rc<Vec<Rc<TotallyNotClientRegion>>> = Rc::new(
-            client_regions
-                .clone()
-                .filter(|client| match client.monitor.clone() {
-                    Some(client_monitor) => monitor.id.to_string() == client_monitor,
-                    None => false,
-                })
-                .collect(),
-        );
+        let monitor_clients: Vec<ClientRegion> = client_regions
+            .clone()
+            .filter(|client| match client.monitor.clone() {
+                Some(client_monitor) => monitor.id.to_string() == client_monitor,
+                None => false,
+            })
+            .collect();
 
-        let start = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("time should go forward");
+        /* let start = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("time should go forward"); */
         let window_buffer = window_buffer(
             (monitor.width as u32, monitor.height as u32),
             monitor_clients,
         );
 
-        let end = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("time should go forward");
+        /* let end = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("time should go forward"); */
         /* println!(
             "{} - Window buffer: {}ms",
             monitor.id,
@@ -222,44 +235,31 @@ pub fn create_window(clients: &HyClients, monitors: Rc<HyMonitors>) -> Option<Hy
         );
     }));
 
-    let mut state = State {
-        running: true,
-        buffer_surfaces,
-        cursor_shape_manager: None,
-        layer_shell: None,
-        shm: None,
-        compositor: None,
-        // this sucks but so do i, it seems like output ids start at 0 and count up
-        output_index: 0,
-        pointer_position: None,
-        pointer_surface: None,
-    };
+    return (
+        State {
+            running: true,
+            buffer_surfaces,
+            cursor_shape_manager: None,
+            layer_shell: None,
+            shm: None,
+            compositor: None,
+            // this sucks but so do i, it seems like output ids start at 0 and count up
+            output_index: 0,
+            pointer_position: None,
+            pointer_surface: None,
+        },
+        client_regions.collect(),
+    );
+}
 
-    println!("Press <ESC> to quit.");
+pub fn create_wayland_window_select() -> EventQueue<State> {
+    let conn = Connection::connect_to_env().unwrap();
 
-    while state.running {
-        event_queue
-            .blocking_dispatch(&mut state)
-            .expect("window loop");
-    }
-    if let (Some(click_position), Some(click_surface)) =
-        (state.pointer_position, state.pointer_surface)
-    {
-        println!("Processing...");
-        let selected_client = clients.iter().find(|client| {
-            let click_x = click_position.0.trunc() as i16;
-            let click_y = click_position.1.trunc() as i16;
-            let x = client.at.0 < click_x && click_x < (client.at.0 + client.size.0);
-            let y = client.at.1 < click_y && click_y < (client.at.1 + client.size.1);
-            return x && y;
-        });
-        return match selected_client {
-            Some(selected_client) => {
-                println!("Selected: {}", selected_client.title);
-                Some(selected_client.clone())
-            }
-            None => None,
-        };
-    }
-    return None;
+    let event_queue = conn.new_event_queue();
+    let qhandle = event_queue.handle();
+
+    let display = conn.display();
+    display.get_registry(&qhandle, ());
+
+    return event_queue;
 }

@@ -1,26 +1,22 @@
-use crate::wayland;
-use hyprland::data::*;
-use hyprland::prelude::*;
-use ratatui::{prelude::*, widgets::*};
-use std::rc::Rc;
+use color_eyre::Result;
 
-pub fn exec(float: bool, _persistentsize: bool, tile: bool, _fullscreen: bool) {
-    if let Ok(monitors) = Monitors::get() {
-        if let Ok(clients) = Clients::get() {
-            let selected_client =
-                wayland::window_selector::create_window(&clients, Rc::new(monitors)); //select_window(&clients);
-            match selected_client {
-                Some(client) => {
-                    println!("Config: ");
-                    if float {
-                        println!("windowrule = float, initialTitle:{}", client.initial_title);
-                    }
-                    if tile {
-                        println!("windowrule = tile, initialTitle:{}", client.initial_title);
-                    }
-                }
-                _ => (),
+use crate::tui::root::tui_root;
+
+pub fn exec(float: bool, _persistentsize: bool, tile: bool, _fullscreen: bool) -> Result<()> {
+    let selected_client = tui_root()?;
+    match selected_client {
+        Some(client) => {
+            println!("Selected: {}", client.title);
+            println!("Config: ");
+            if float {
+                println!("windowrule = float, initialTitle:{}", client.initial_title);
+            }
+            if tile {
+                println!("windowrule = tile, initialTitle:{}", client.initial_title);
             }
         }
-    }
+        _ => (),
+    };
+
+    Ok(())
 }
